@@ -80,7 +80,7 @@ Go to **Actions → Daily Sweepstake Update → Run workflow** to trigger it imm
 
 ```
 wc2026-sweepstake/
-├── sweepstake.json          ← Participants & teams (already configured)
+├── sweepstaketeamswc26.json          ← Participants & teams (already configured)
 ├── tracker.py               ← Main script (runs daily)
 ├── requirements.txt         ← Python dependencies
 ├── reports/                 ← HTML reports saved here (auto-committed)
