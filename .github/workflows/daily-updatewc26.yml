@@ -1,0 +1,41 @@
+name: Daily Sweepstake Update
+
+on:
+  schedule:
+    # Runs every day at 08:00 UTC (9am BST during summer)
+    - cron: "0 8 * * *"
+  workflow_dispatch:  # Also allows manual trigger from GitHub UI
+
+permissions:
+  contents: write  # Needed to commit the HTML reports back to the repo
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Run tracker
+        env:
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        run: python wc26tracker.py
+
+      - name: Commit report to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/
+          git diff --staged --quiet || git commit -m "📊 Daily update $(date -u +'%Y-%m-%d')"
+          git push
