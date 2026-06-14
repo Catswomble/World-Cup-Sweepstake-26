@@ -1,0 +1,47 @@
+{
+  "participants": [
+    {
+      "name": "Toby",
+      "teams": ["Belgium", "Norway", "Algeria", "Croatia", "Senegal", "Turkey"]
+    },
+    {
+      "name": "Mark",
+      "teams": ["France", "Switzerland", "Ghana", "Qatar", "Canada"]
+    },
+    {
+      "name": "Jack",
+      "teams": ["Spain", "Uzbekistan", "Scotland", "Uruguay", "Saudi Arabia"]
+    },
+    {
+      "name": "Dylan",
+      "teams": ["Argentina", "Mexico", "South Korea", "DR Congo", "New Zealand", "Haiti"]
+    },
+    {
+      "name": "Caelan",
+      "teams": ["Netherlands", "Austria", "Czechia", "Cape Verde", "Jordan", "Bosnia and Herzegovina"]
+    },
+    {
+      "name": "Yonis",
+      "teams": ["England", "Ecuador", "Colombia", "Iran", "Sweden"]
+    },
+    {
+      "name": "Alex",
+      "teams": ["Germany", "USA", "Australia", "South Africa", "Iraq"]
+    },
+    {
+      "name": "Dage",
+      "teams": ["Portugal", "Morocco", "Paraguay", "Ivory Coast", "Tunisia"]
+    },
+    {
+      "name": "Isaac",
+      "teams": ["Brazil", "Japan", "Panama", "Curacao", "Egypt"]
+    }
+  ],
+  "prizes": {
+    "winner": "Team that wins the World Cup",
+    "worst_team": "Team with fewest points (then worst GD, fewest goals scored, most cards)",
+    "best_average": "Person whose teams have highest avg points per team (group stage)",
+    "worst_average": "Person whose teams have lowest avg points per team (group stage)"
+  },
+  "notes": "6 blanks were added to make the draw even. Mark, Jack, Yonis, Alex, Dage and Isaac have 5 teams; Toby, Dylan and Caelan have 6."
+}
