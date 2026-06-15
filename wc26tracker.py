@@ -1,235 +1,145 @@
 #!/usr/bin/env python3
 """
 World Cup 2026 Sweepstake Tracker
-Fetches live group stage standings and calculates prize positions.
+Fetches live group stage standings via football-data.org API.
 """
 
 import json
 import os
 import smtplib
-import sys
 from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import requests
-from bs4 import BeautifulSoup
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 SWEEPSTAKE_FILE = "sweepstaketeamswc26.json"
 
-# All 48 teams mapped to their group (for reference / normalisation)
-ALL_GROUPS = {
-    "A": ["Mexico", "South Africa", "South Korea", "Czechia"],
-    "B": ["Canada", "Bosnia and Herzegovina", "Qatar", "Switzerland"],
-    "C": ["Brazil", "Morocco", "Haiti", "Scotland"],
-    "D": ["USA", "Paraguay", "Australia", "Turkey"],
-    "E": ["Germany", "Curacao", "Ivory Coast", "Ecuador"],
-    "F": ["Netherlands", "Japan", "Sweden", "Tunisia"],
-    "G": ["Belgium", "Egypt", "Iran", "New Zealand"],
-    "H": ["Spain", "Cape Verde", "Saudi Arabia", "Uruguay"],
-    "I": ["France", "Senegal", "Iraq", "Norway"],
-    "J": ["Argentina", "Algeria", "Austria", "Jordan"],
-    "K": ["Portugal", "DR Congo", "Uzbekistan", "Colombia"],
-    "L": ["England", "Croatia", "Ghana", "Panama"],
-}
+# football-data.org competition ID for the 2026 World Cup
+WC2026_ID = "WC"
 
-# Normalise team name variations from different data sources
+# Normalise team name variations from the API to match our sweepstake.json
 NAME_MAP = {
     "türkiye": "Turkey",
     "turkiye": "Turkey",
     "côte d'ivoire": "Ivory Coast",
     "cote d'ivoire": "Ivory Coast",
-    "côte divoire": "Ivory Coast",
     "ir iran": "Iran",
     "cabo verde": "Cape Verde",
     "dr congo": "DR Congo",
+    "congo dr": "DR Congo",
     "democratic republic of congo": "DR Congo",
     "bosnia & herzegovina": "Bosnia and Herzegovina",
     "bosnia-herzegovina": "Bosnia and Herzegovina",
-    "república checa": "Czechia",
     "czech republic": "Czechia",
     "united states": "USA",
-    "united states of america": "USA",
+    "usa": "USA",
     "curaçao": "Curacao",
-    "new zealand": "New Zealand",
-    "south africa": "South Africa",
+    "curacao": "Curacao",
+    "korea republic": "South Korea",
+    "republic of korea": "South Korea",
     "south korea": "South Korea",
     "saudi arabia": "Saudi Arabia",
+    "new zealand": "New Zealand",
+    "south africa": "South Africa",
+    "ivory coast": "Ivory Coast",
 }
 
 def normalise(name: str) -> str:
-    """Normalise a team name to match our sweepstake.json format."""
     n = name.strip().lower()
     return NAME_MAP.get(n, name.strip().title())
 
 
 # ── Data Fetching ───────────────────────────────────────────────────────────────
 
-def fetch_standings_from_fifa() -> dict[str, dict]:
+def get_all_standings() -> dict[str, dict]:
     """
-    Fetch group stage standings from the official FIFA website.
-    Returns a dict keyed by team name with their stats.
+    Fetch group stage standings from football-data.org API.
+    Returns a dict keyed by normalised team name.
     """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
-    }
+    api_key = os.environ.get("FOOTBALL_DATA_API_KEY", "")
+    if not api_key:
+        print("WARNING: FOOTBALL_DATA_API_KEY not set!")
 
+    headers = {"X-Auth-Token": api_key}
     teams: dict[str, dict] = {}
 
-    for group_letter in ALL_GROUPS:
-        url = (
-            f"https://www.fifa.com/en/tournaments/mens/worldcup/"
-            f"canadamexicousa2026/standings?group={group_letter}"
-        )
-        try:
-            resp = requests.get(url, headers=headers, timeout=15)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            # FIFA standings rows — each row is a team
-            rows = soup.select("tr[data-testid*='group-standing-row']") or \
-                   soup.select("tbody tr")
-
-            for row in rows:
-                cells = row.find_all("td")
-                if len(cells) < 9:
-                    continue
-                try:
-                    # Typical FIFA table: Pos | Team | P | W | D | L | GF | GA | GD | Pts | YC | RC
-                    team_el = row.select_one("[data-testid='team-name']") or cells[1]
-                    raw_name = team_el.get_text(strip=True)
-                    name = normalise(raw_name)
-
-                    def ci(idx, default=0):
-                        try:
-                            return int(cells[idx].get_text(strip=True))
-                        except (ValueError, IndexError):
-                            return default
-
-                    teams[name] = {
-                        "group": group_letter,
-                        "played": ci(2),
-                        "won": ci(3),
-                        "drawn": ci(4),
-                        "lost": ci(5),
-                        "gf": ci(6),   # goals for
-                        "ga": ci(7),   # goals against
-                        "gd": ci(8),   # goal difference
-                        "points": ci(9),
-                        "yellow_cards": ci(10),
-                        "red_cards": ci(11),
-                    }
-                except Exception:
-                    continue
-
-        except Exception as e:
-            print(f"  Warning: could not fetch Group {group_letter} from FIFA: {e}")
-
-    return teams
-
-
-def fetch_standings_fallback() -> dict[str, dict]:
-    """
-    Fallback: scrape standings from ESPN or BBC Sport if FIFA site fails.
-    """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
-    }
-
-    teams: dict[str, dict] = {}
+    print("Fetching standings from football-data.org...")
 
     try:
-        resp = requests.get(
-            "https://www.bbc.co.uk/sport/football/world-cup/tables",
-            headers=headers, timeout=15
-        )
+        url = f"https://api.football-data.org/v4/competitions/{WC2026_ID}/standings"
+        resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        data = resp.json()
 
-        group_sections = soup.select(".gs-o-table")
-        for section in group_sections:
-            rows = section.select("tbody tr")
-            for row in rows:
-                cells = row.find_all("td")
-                if len(cells) < 8:
-                    continue
-                try:
-                    raw_name = cells[0].get_text(strip=True)
-                    name = normalise(raw_name)
-                    def ci(idx, default=0):
-                        try:
-                            return int(cells[idx].get_text(strip=True))
-                        except (ValueError, IndexError):
-                            return default
-                    teams[name] = {
-                        "group": "?",
-                        "played": ci(1),
-                        "won": ci(2),
-                        "drawn": ci(3),
-                        "lost": ci(4),
-                        "gf": ci(5),
-                        "ga": ci(6),
-                        "gd": ci(5) - ci(6),
-                        "points": ci(7),
-                        "yellow_cards": 0,
-                        "red_cards": 0,
-                    }
-                except Exception:
-                    continue
+        standings_list = data.get("standings", [])
+
+        for group in standings_list:
+            group_name = group.get("group", "?")  # e.g. "GROUP_A"
+            letter = group_name.replace("GROUP_", "") if "GROUP_" in group_name else group_name
+
+            for entry in group.get("table", []):
+                team_info = entry.get("team", {})
+                raw_name = team_info.get("name", "")
+                name = normalise(raw_name)
+
+                teams[name] = {
+                    "group": letter,
+                    "played": entry.get("playedGames", 0),
+                    "won": entry.get("won", 0),
+                    "drawn": entry.get("draw", 0),
+                    "lost": entry.get("lost", 0),
+                    "gf": entry.get("goalsFor", 0),
+                    "ga": entry.get("goalsAgainst", 0),
+                    "gd": entry.get("goalDifference", 0),
+                    "points": entry.get("points", 0),
+                    "yellow_cards": 0,  # not provided by this API
+                    "red_cards": 0,
+                }
+
+        print(f"  Got standings for {len(teams)} teams.")
+
     except Exception as e:
-        print(f"  Warning: fallback scrape also failed: {e}")
+        print(f"  ERROR fetching from football-data.org: {e}")
+        print("  Falling back to zeros for all teams.")
 
-    return teams
-
-
-def get_all_standings() -> dict[str, dict]:
-    """Try FIFA first, fallback to BBC if needed."""
-    print("Fetching standings from FIFA...")
-    standings = fetch_standings_from_fifa()
-
-    if len(standings) < 10:
-        print("FIFA fetch returned too few teams, trying BBC fallback...")
-        standings = fetch_standings_fallback()
-
-    if not standings:
-        print("ERROR: Could not fetch any standings. Using zeros.")
-        # Build empty standings so the script still runs
+        ALL_GROUPS = {
+            "A": ["Mexico", "South Africa", "South Korea", "Czechia"],
+            "B": ["Canada", "Bosnia and Herzegovina", "Qatar", "Switzerland"],
+            "C": ["Brazil", "Morocco", "Haiti", "Scotland"],
+            "D": ["USA", "Paraguay", "Australia", "Turkey"],
+            "E": ["Germany", "Curacao", "Ivory Coast", "Ecuador"],
+            "F": ["Netherlands", "Japan", "Sweden", "Tunisia"],
+            "G": ["Belgium", "Egypt", "Iran", "New Zealand"],
+            "H": ["Spain", "Cape Verde", "Saudi Arabia", "Uruguay"],
+            "I": ["France", "Senegal", "Iraq", "Norway"],
+            "J": ["Argentina", "Algeria", "Austria", "Jordan"],
+            "K": ["Portugal", "DR Congo", "Uzbekistan", "Colombia"],
+            "L": ["England", "Croatia", "Ghana", "Panama"],
+        }
         for group, team_list in ALL_GROUPS.items():
             for t in team_list:
-                standings[t] = {
+                teams[t] = {
                     "group": group, "played": 0, "won": 0, "drawn": 0,
                     "lost": 0, "gf": 0, "ga": 0, "gd": 0,
                     "points": 0, "yellow_cards": 0, "red_cards": 0,
                 }
 
-    print(f"  Got standings for {len(standings)} teams.")
-    return standings
+    return teams
 
 
 # ── Prize Calculations ─────────────────────────────────────────────────────────
 
 def tiebreak_key(team_stats: dict) -> tuple:
-    """
-    Returns a sort key for 'worst team' prize.
-    Lower is worse (ascending): fewer points, worse GD, fewer goals, more cards.
-    """
     s = team_stats
     cards = s.get("yellow_cards", 0) + (s.get("red_cards", 0) * 3)
     return (
-        s.get("points", 0),         # fewer = worse
-        s.get("gd", 0),             # lower = worse
-        s.get("gf", 0),             # fewer = worse
-        -cards,                     # more cards = worse (negate so lower sort = more cards)
+        s.get("points", 0),
+        s.get("gd", 0),
+        s.get("gf", 0),
+        -cards,
     )
 
 
@@ -240,23 +150,15 @@ def load_sweepstake() -> list[dict]:
 
 
 def calculate_prizes(participants: list[dict], standings: dict[str, dict]) -> dict:
-    """
-    Work out standings for all 4 prizes.
-    """
     results = []
-
-    all_teams_in_play = set()
 
     for p in participants:
         real_teams = [t for t in p["teams"] if t != "BLANK"]
-        all_teams_in_play.update(real_teams)
-
         team_stats = []
         total_points = 0
         has_any_data = False
 
         for team in real_teams:
-            # Try exact match first, then case-insensitive
             stats = standings.get(team)
             if not stats:
                 for k, v in standings.items():
@@ -287,32 +189,21 @@ def calculate_prizes(participants: list[dict], standings: dict[str, dict]) -> di
             "has_data": has_any_data,
         })
 
-    # ── Prize: Best average ────────────────────────────────────
     def avg_tiebreak(r):
-        # Higher avg = better. Tiebreak: higher total, then GD sum, etc.
         total_gd = sum(s.get("gd", 0) for _, s in r["team_stats"])
         total_gf = sum(s.get("gf", 0) for _, s in r["team_stats"])
-        total_cards = sum(
-            s.get("yellow_cards", 0) + s.get("red_cards", 0) * 3
-            for _, s in r["team_stats"]
-        )
+        total_cards = sum(s.get("yellow_cards", 0) + s.get("red_cards", 0) * 3 for _, s in r["team_stats"])
         return (-r["avg_points"], -total_gd, -total_gf, total_cards)
 
-    sorted_by_avg = sorted(results, key=avg_tiebreak)
-
-    # ── Prize: Worst average ───────────────────────────────────
     def worst_avg_tiebreak(r):
         total_gd = sum(s.get("gd", 0) for _, s in r["team_stats"])
         total_gf = sum(s.get("gf", 0) for _, s in r["team_stats"])
-        total_cards = sum(
-            s.get("yellow_cards", 0) + s.get("red_cards", 0) * 3
-            for _, s in r["team_stats"]
-        )
+        total_cards = sum(s.get("yellow_cards", 0) + s.get("red_cards", 0) * 3 for _, s in r["team_stats"])
         return (r["avg_points"], total_gd, total_gf, -total_cards)
 
+    sorted_by_avg = sorted(results, key=avg_tiebreak)
     sorted_by_worst_avg = sorted(results, key=worst_avg_tiebreak)
 
-    # ── Prize: Worst individual team ──────────────────────────
     all_team_entries = []
     for r in results:
         for team, stats in r["team_stats"]:
@@ -331,7 +222,7 @@ def calculate_prizes(participants: list[dict], standings: dict[str, dict]) -> di
         "best_avg_ranking": sorted_by_avg,
         "worst_avg_ranking": sorted_by_worst_avg,
         "worst_team": worst_team_entry,
-        "all_worst_teams": sorted_worst_teams[:5],  # show top 5 contenders
+        "all_worst_teams": sorted_worst_teams[:5],
     }
 
 
@@ -342,70 +233,46 @@ def medal(pos: int) -> str:
 
 
 def build_report(prizes: dict, standings: dict) -> tuple[str, str]:
-    """Returns (plain_text, html) report."""
     now = datetime.now(timezone.utc).strftime("%A %d %B %Y, %H:%M UTC")
     results = prizes["results"]
 
     # ── Plain text ─────────────────────────────────────────────
     lines = [
         "=" * 60,
-        f"  ⚽ WORLD CUP 2026 SWEEPSTAKE UPDATE",
+        "  ⚽ WORLD CUP 2026 SWEEPSTAKE UPDATE",
         f"  {now}",
         "=" * 60,
         "",
+        "📋 YOUR TEAMS — CURRENT STANDINGS",
+        "-" * 60,
     ]
 
-    # Individual team standings per person
-    lines.append("📋 YOUR TEAMS — CURRENT STANDINGS")
-    lines.append("-" * 60)
     for r in sorted(results, key=lambda x: x["name"]):
         lines.append(f"\n{r['name']}  (avg: {r['avg_points']:.2f} pts/team)")
         for team, s in r["team_stats"]:
-            played = s['played']
-            pts = s['points']
-            gd = s['gd']
-            gf = s['gf']
             lines.append(
-                f"  {'✅' if played > 0 else '⏳'} {team:<22} "
-                f"P{played} | Pts:{pts} | GD:{gd:+d} | GF:{gf}"
+                f"  {'✅' if s['played'] > 0 else '⏳'} {team:<22} "
+                f"P{s['played']} | Pts:{s['points']} | GD:{s['gd']:+d} | GF:{s['gf']}"
             )
 
     lines += ["", "=" * 60, "🏆 PRIZE LEADERBOARDS", "=" * 60]
 
-    # Prize 1: Winner
-    lines += ["", "🎯 WHO HAS THE WINNING TEAM?"]
-    lines.append("  (Updated once knockout stage begins)")
-    for r in results:
-        for team, s in r["team_stats"]:
-            if s["played"] > 0:
-                lines.append(f"  {r['name']} has {team}")
-
-    # Prize 2: Worst team
-    wt = prizes["worst_team"]
-    if wt:
-        s = wt["stats"]
-        lines += [
-            "",
-            "💀 WORST TEAM PRIZE CONTENDERS (team with fewest points):",
-        ]
-        for i, entry in enumerate(prizes["all_worst_teams"]):
-            st = entry["stats"]
-            cards = st.get("yellow_cards", 0) + st.get("red_cards", 0) * 3
-            lines.append(
-                f"  {medal(i)} {entry['team']:<22} "
-                f"(held by {entry['participant']}) — "
-                f"Pts:{st['points']} GD:{st['gd']:+d} GF:{st['gf']} Cards:{cards}"
-            )
-
-    # Prize 3: Best average
     lines += ["", "⭐ BEST AVERAGE POINTS/TEAM (group stage):"]
     for i, r in enumerate(prizes["best_avg_ranking"]):
         lines.append(f"  {medal(i)} {r['name']:<15} {r['avg_points']:.3f} avg  ({r['total_points']} pts from {r['num_teams']} teams)")
 
-    # Prize 4: Worst average
     lines += ["", "😬 WORST AVERAGE POINTS/TEAM (group stage):"]
     for i, r in enumerate(prizes["worst_avg_ranking"]):
         lines.append(f"  {medal(i)} {r['name']:<15} {r['avg_points']:.3f} avg  ({r['total_points']} pts from {r['num_teams']} teams)")
+
+    lines += ["", "💀 WORST TEAM PRIZE CONTENDERS:"]
+    for i, entry in enumerate(prizes["all_worst_teams"]):
+        st = entry["stats"]
+        cards = st.get("yellow_cards", 0) + st.get("red_cards", 0) * 3
+        lines.append(
+            f"  {medal(i)} {entry['team']:<22} (held by {entry['participant']}) — "
+            f"Pts:{st['points']} GD:{st['gd']:+d} GF:{st['gf']} Cards:{cards}"
+        )
 
     lines += ["", "=" * 60, "Next update tomorrow. Good luck! ⚽", "=" * 60]
     plain = "\n".join(lines)
@@ -427,13 +294,11 @@ def build_report(prizes: dict, standings: dict) -> tuple[str, str]:
           </td>
         </tr>"""
         for i, (team, s) in enumerate(r["team_stats"]):
-            played = s['played']
-            cards = s.get('yellow_cards', 0) + s.get('red_cards', 0) * 3
             team_rows += f"""
         <tr style="background:{row_color(i)}">
-          <td style="padding:6px 12px">{'✅' if played > 0 else '⏳'} {team}</td>
+          <td style="padding:6px 12px">{'✅' if s['played'] > 0 else '⏳'} {team}</td>
           <td style="text-align:center">{pts_badge(s['points'])}</td>
-          <td style="text-align:center">P{played}</td>
+          <td style="text-align:center">P{s['played']}</td>
           <td style="text-align:center">{s['gd']:+d} GD</td>
           <td style="text-align:center">{s['gf']} GF</td>
           <td style="text-align:center">🟨×{s.get('yellow_cards',0)} 🟥×{s.get('red_cards',0)}</td>
@@ -501,14 +366,14 @@ def build_report(prizes: dict, standings: dict) -> tuple[str, str]:
 </table>
 
 <h2>⭐ Best Average Pts/Team</h2>
-<p style="color:#666;font-size:13px">Highest average points across your teams (group stage). Prize goes to position 🥇.</p>
+<p style="color:#666;font-size:13px">Highest average points across your teams (group stage). Prize goes to 🥇.</p>
 <table>
   <thead><tr><th>Participant</th><th>Avg Pts/Team</th><th>Total Pts</th><th>Teams</th></tr></thead>
   <tbody>{best_avg_rows}</tbody>
 </table>
 
 <h2>😬 Worst Average Pts/Team</h2>
-<p style="color:#666;font-size:13px">Lowest average — another prize! Position 🥇 wins (or loses, depending how you look at it).</p>
+<p style="color:#666;font-size:13px">Lowest average — another prize! Position 🥇 wins (or loses...).</p>
 <table>
   <thead><tr><th>Participant</th><th>Avg Pts/Team</th><th>Total Pts</th><th>Teams</th></tr></thead>
   <tbody>{worst_avg_rows}</tbody>
@@ -531,7 +396,6 @@ def build_report(prizes: dict, standings: dict) -> tuple[str, str]:
 # ── Email Sending ──────────────────────────────────────────────────────────────
 
 def send_email(plain: str, html: str):
-    """Send the report via Gmail SMTP using GitHub Actions secrets."""
     sender = os.environ.get("EMAIL_SENDER")
     recipient = os.environ.get("EMAIL_RECIPIENT")
     password = os.environ.get("EMAIL_PASSWORD")
@@ -557,7 +421,7 @@ def send_email(plain: str, html: str):
         print(f"✅ Email sent to {recipient}")
     except Exception as e:
         print(f"❌ Email failed: {e}")
-        print(plain)  # fallback print
+        print(plain)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -572,14 +436,12 @@ def main():
     prizes = calculate_prizes(participants, standings)
     plain, html = build_report(prizes, standings)
 
-    # Save HTML report as artifact
     os.makedirs("reports", exist_ok=True)
     report_path = f"reports/report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.html"
     with open(report_path, "w") as f:
         f.write(html)
     print(f"📄 Report saved to {report_path}")
 
-    # Also save latest.html for easy access
     with open("reports/latest.html", "w") as f:
         f.write(html)
 
